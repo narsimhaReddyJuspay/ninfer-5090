@@ -1,4 +1,10 @@
-# syntax=docker/dockerfile:1
+# RunPod serverless worker image: NInfer built for sm_90a (H100) with a Python
+# handler that keeps one ninfer-serve process resident per worker.
+#
+# Build from the repository root and push:
+#   docker build -f deploy/runpod/Dockerfile.serverless \
+#       --tag <registry>/ninfer-h100-serverless:latest .
+#   docker push <registry>/ninfer-h100-serverless:latest
 
 FROM nvidia/cuda:13.1.2-devel-ubuntu24.04 AS build
 
@@ -18,16 +24,14 @@ RUN apt-get update \
 WORKDIR /src
 COPY . .
 
-# One execution architecture per image: 120a (RTX 5090, default) or 90a (H100),
-# selected with --build-arg NINFER_CUDA_ARCHITECTURES=90a.
-ARG NINFER_CUDA_ARCHITECTURES=120a
+# This lane is H100-only; the engine build is pinned to sm_90a.
 RUN cmake -S . -B /build -G Ninja \
         -DCMAKE_BUILD_TYPE=Release \
-        -DCMAKE_CUDA_ARCHITECTURES="${NINFER_CUDA_ARCHITECTURES}" \
+        -DCMAKE_CUDA_ARCHITECTURES=90a \
         -DNINFER_BUILD_APPS=ON \
         -DBUILD_TESTING=OFF \
         -DNINFER_BUILD_BENCHMARKS=OFF \
-    && cmake --build /build --parallel --target ninfer ninfer-serve
+    && cmake --build /build --parallel --target ninfer-serve
 
 FROM nvidia/cuda:13.1.2-runtime-ubuntu24.04
 
@@ -40,13 +44,17 @@ RUN apt-get update \
         libavutil58 \
         libcurl4t64 \
         libswscale7 \
-    && rm -rf /var/lib/apt/lists/*
+        python3 \
+        python3-pip \
+    && rm -rf /var/lib/apt/lists/* \
+    && pip3 install --break-system-packages --no-cache-dir runpod
 
-COPY --from=build /build/apps/ninfer /usr/local/bin/ninfer
 COPY --from=build /build/apps/ninfer-serve /usr/local/bin/ninfer-serve
+COPY deploy/runpod/worker.py /app/worker.py
+COPY tools/bench/serve_metrics.py /app/serve_metrics.py
 
-WORKDIR /workspace
-EXPOSE 8080
-STOPSIGNAL SIGTERM
+# Model artifacts are served from a network volume mounted at /models.
+ENV NINFER_MODEL=/models/qwen3_8_27b.ninfer
 
-CMD ["ninfer-serve", "--help"]
+WORKDIR /app
+CMD ["python3", "-u", "worker.py"]

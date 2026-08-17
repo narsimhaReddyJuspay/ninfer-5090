@@ -9,6 +9,7 @@
 #include "core/device.h"
 #include "ninfer/ops/rope.h"
 #include "ninfer_bench_common.h"
+#include "ops/common/device_topology.h"
 #include "ops/kernel/rope.cuh"
 
 #include <cuda_bf16.h>
@@ -25,18 +26,21 @@ using namespace ninfer::bench;
 
 namespace {
 
-constexpr int kTextHeadDim            = 256;
-constexpr int kTextRotaryDim          = 64;
-constexpr int kDflashHeadDim          = 128;
-constexpr int kDflashRotaryDim        = 128;
-constexpr int kDflashQHeads           = 32;
-constexpr int kDflashKHeads           = 8;
-constexpr int kTextChunkMaxTokens     = 1024;
-constexpr int kLargeBlockWaveCapacity = 1020;
-constexpr float kTextTheta            = 1.0e7F;
-constexpr int kVisionHeadDim          = 72;
-constexpr int kVisionHeads            = 16;
-constexpr float kVisionTheta          = 10'000.0F;
+constexpr int kTextHeadDim         = 256;
+constexpr int kTextRotaryDim       = 64;
+constexpr int kDflashHeadDim       = 128;
+constexpr int kDflashRotaryDim     = 128;
+constexpr int kDflashQHeads        = 32;
+constexpr int kDflashKHeads        = 8;
+constexpr float kTextTheta         = 1.0e7F;
+constexpr int kVisionHeadDim       = 72;
+constexpr int kVisionHeads         = 16;
+constexpr float kVisionTheta       = 10'000.0F;
+
+int large_block_wave_capacity() {
+    // Mirrors the production launcher's one-wave block decision on the resident GPU.
+    return ops::kRopeLargeBlockCtasPerSm * ops::detail::device_sm_count();
+}
 
 std::vector<int> parse_csv(const char* value) {
     std::vector<int> values;
@@ -211,13 +215,13 @@ __global__ void rope_split_payload_control_kernel(const std::int32_t* positions,
 
 template <int QHeads, int KHeads>
 int production_text_block(int tokens) {
-    int block = 128;
+    int block = ops::kRopeSmallBlock;
     if (tokens <= 6) {
         block = (QHeads + KHeads) * 32;
-    } else if (tokens <= kLargeBlockWaveCapacity) {
-        block = 256;
-    } else if (tokens <= kTextChunkMaxTokens) {
-        block = 192;
+    } else if (tokens <= large_block_wave_capacity()) {
+        block = ops::kRopeLargeBlock;
+    } else if (tokens <= ops::kRopeDefaultChunkTarget) {
+        block = ops::kRopeFullChunkBlock;
     }
     const int head_warps = (QHeads + KHeads) * 32;
     if (block > head_warps) { block = head_warps; }

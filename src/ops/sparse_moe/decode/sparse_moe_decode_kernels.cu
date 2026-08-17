@@ -263,8 +263,9 @@ __global__ void sparse_moe_d3_path_tiled_kernel(
     const std::uint8_t* __restrict__ routed_scales, const std::uint8_t* __restrict__ shared_codes,
     const std::uint8_t* __restrict__ shared_scales, float* __restrict__ token_activations,
     int tokens, const int* __restrict__ adaptive_route_jobs) {
-    // Three path CTAs per token/output row expose enough blocks for the 170-SM target and keep the
-    // heavier shared W8 path from holding eight completed routed warps resident.
+    // Three path CTAs per token/output row expose enough blocks for the RTX 5090 (170-SM)
+    // target and keep the heavier shared W8 path from holding eight completed routed warps
+    // resident; the shape is a 5090-measured tuning rather than a residency requirement.
     static_assert(PathsPerBlock > 0 && (kTopK + 1) % PathsPerBlock == 0);
     constexpr int kPathBlocks = (kTopK + 1) / PathsPerBlock;
     __shared__ __align__(16) __nv_bfloat16 x_shared[kHidden];

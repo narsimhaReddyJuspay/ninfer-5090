@@ -49,6 +49,13 @@ struct Bf16GdnNormGatingPlan {
 
 const char* bf16_gdn_gating_schedule_name(Bf16GdnGatingScheduleId schedule) noexcept;
 
+// Per-SM residency of the cooperative MMA kernel family on the current device,
+// derived through the occupancy API for the given split-K specialization.
+// SplitK>1 schedules launch cooperatively and their whole grid must be
+// resident; the planner multiplies this by the device SM count as the
+// device-wide legality budget.
+int bf16_gdn_gating_cooperative_ctas_per_sm(std::int32_t split_k, bool thirty_five);
+
 bool bf16_gdn_gating_admits(const Bf16GdnGatingProblem& problem) noexcept;
 Bf16GdnGatingPlan bf16_gdn_gating_resolve_plan(const Bf16GdnGatingProblem& problem);
 Bf16GdnGatingPlan bf16_gdn_gating_resolve_candidate(Bf16GdnGatingScheduleId schedule,

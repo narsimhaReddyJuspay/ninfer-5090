@@ -1,4 +1,5 @@
 #include "ops/gdn_gating_proj/bf16/bf16_gdn_gating_proj_kernels.h"
+#include "ops/gdn_gating_proj/bf16/bf16_gdn_gating_proj_plan.h"
 
 #include "ops/common/math.cuh"
 #include "ops/common/memory.cuh"
@@ -9,6 +10,7 @@
 
 #include <cuda_bf16.h>
 
+#include <algorithm>
 #include <cstddef>
 #include <cstdint>
 #include <stdexcept>
@@ -329,6 +331,68 @@ void launch_bf16_prefill_mma(Bf16GdnGatingTokenVariant variant, const Tensor& x,
 }
 
 } // namespace
+
+namespace {
+
+// Actual per-SM residency of one cooperative MMA specialization on the current
+// device, through the occupancy API. The result is cached per instantiation;
+// Full and Predicated token variants are both measured and the smaller wins so
+// the legality model never overestimates the launchable grid.
+template <class Geometry, int SplitK, int Warps, bool NormalizeInput = false,
+          int NormTokenCapacity = 0>
+int cooperative_occupancy_blocks() {
+    constexpr int kSmemBytes = kBf16GdnSmemBytes<Geometry::kBlockN>;
+    static const int blocks  = [] {
+        // A kernel-template specialization names a function, not a type; hold
+        // it as a pointer so the attribute and occupancy APIs get the symbol.
+        auto* full = &bf16_gdn_gating_proj_gemm_mma_kernel<Geometry, SplitK, true, Warps,
+                                                           NormalizeInput, NormTokenCapacity>;
+        auto* pred = &bf16_gdn_gating_proj_gemm_mma_kernel<Geometry, SplitK, false, Warps,
+                                                           NormalizeInput, NormTokenCapacity>;
+        CUDA_CHECK(cudaFuncSetAttribute(full, cudaFuncAttributeMaxDynamicSharedMemorySize,
+                                        kSmemBytes));
+        CUDA_CHECK(cudaFuncSetAttribute(pred, cudaFuncAttributeMaxDynamicSharedMemorySize,
+                                        kSmemBytes));
+        int full_blocks = 0;
+        int pred_blocks = 0;
+        CUDA_CHECK(cudaOccupancyMaxActiveBlocksPerMultiprocessor(&full_blocks, full, Warps * 32,
+                                                                 kSmemBytes));
+        CUDA_CHECK(cudaOccupancyMaxActiveBlocksPerMultiprocessor(&pred_blocks, pred, Warps * 32,
+                                                                 kSmemBytes));
+        return full_blocks < pred_blocks ? full_blocks : pred_blocks;
+    }();
+    return blocks;
+}
+
+} // namespace
+
+int bf16_gdn_gating_cooperative_ctas_per_sm(std::int32_t split_k, bool thirty_five) {
+    if (thirty_five) {
+        switch (split_k) {
+        case 32:
+            // Covers the plain split32 launch and every fused norm-gating
+            // token capacity the T<=16 control path can select.
+            return std::min({cooperative_occupancy_blocks<Bf16Gdn35Geometry, 32, 8>(),
+                             cooperative_occupancy_blocks<Bf16Gdn35Geometry, 32, 8, true, 6>(),
+                             cooperative_occupancy_blocks<Bf16Gdn35Geometry, 32, 8, true, 8>(),
+                             cooperative_occupancy_blocks<Bf16Gdn35Geometry, 32, 8, true, 12>(),
+                             cooperative_occupancy_blocks<Bf16Gdn35Geometry, 32, 8, true, 16>()});
+        case 16: return cooperative_occupancy_blocks<Bf16Gdn35Geometry, 16, 8>();
+        case 8: return cooperative_occupancy_blocks<Bf16Gdn35Geometry, 8, 8>();
+        case 4: return cooperative_occupancy_blocks<Bf16Gdn35Geometry, 4, 8>();
+        case 2: return cooperative_occupancy_blocks<Bf16Gdn35Geometry, 2, 8>();
+        default: break;
+        }
+    } else {
+        switch (split_k) {
+        case 8: return cooperative_occupancy_blocks<Bf16Gdn27Geometry, 8, 8>();
+        case 4: return cooperative_occupancy_blocks<Bf16Gdn27Geometry, 4, kBf16GdnWarps>();
+        case 2: return cooperative_occupancy_blocks<Bf16Gdn27Geometry, 2, kBf16GdnWarps>();
+        default: break;
+        }
+    }
+    throw std::invalid_argument("BF16 GDN gating: schedule is not a cooperative MMA split");
+}
 
 void bf16_gdn_gating_proj_gemv_launch(const Tensor& x, const Weight& a_weight,
                                       const Weight& b_weight, const Tensor& A_log,

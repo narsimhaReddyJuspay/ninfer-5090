@@ -21,6 +21,16 @@ enum class RopeKernelMode : std::int32_t {
 
 inline constexpr int kRopeMaxHalf = 128;
 
+// Shared launch-tuning facts for the fixed-block Text RoPE route. The launcher
+// and its benchmark consume the same values so the measured route cannot drift
+// from the production one. kRopeLargeBlockCtasPerSm is the one-wave occupancy
+// assumption used with the resident device's SM count.
+inline constexpr int kRopeSmallBlock          = 128;
+inline constexpr int kRopeLargeBlock          = 256;
+inline constexpr int kRopeFullChunkBlock      = 192;
+inline constexpr int kRopeDefaultChunkTarget  = 1024;
+inline constexpr int kRopeLargeBlockCtasPerSm = 6;
+
 static __device__ __constant__ float kTextRopeInvFrequency[32] = {
     1.000000000e+00F, 6.042963902e-01F, 3.651741273e-01F, 2.206734069e-01F, 1.333521432e-01F,
     8.058421878e-02F, 4.869675252e-02F, 2.942727176e-02F, 1.778279410e-02F, 1.074607828e-02F,

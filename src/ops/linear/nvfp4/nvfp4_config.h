@@ -2,8 +2,17 @@
 
 #include <cstdint>
 #include <stdexcept>
+#include <string>
 
 namespace ninfer::ops::detail {
+
+// Every nvfp4 W4A4 rejection uses this one helper so the 90a build's error
+// contract stays identical across op families and the rejection test.
+[[noreturn]] inline void throw_nvfp4_w4a4_unavailable(const char* op) {
+    throw std::invalid_argument(std::string("nvfp4 W4A4 ") + op +
+                                " requires the Blackwell FP4 tensor-core build "
+                                "(CMAKE_CUDA_ARCHITECTURES=120a)");
+}
 
 enum class Nvfp4ScaleAccess : std::uint8_t {
     StagedRaw,

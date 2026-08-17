@@ -24,6 +24,12 @@
 #include <utility>
 #include <vector>
 
+// Set by the CMake execution-architecture selection (120a or 90a); a build
+// without it cannot validate its device.
+#ifndef NINFER_EXECUTION_SM
+#error "NINFER_EXECUTION_SM must be defined by the CMake architecture selection"
+#endif
+
 namespace ninfer::targets::qwen3_6::detail::NINFER_QWEN36_RUNTIME_NS {
 namespace {
 
@@ -596,9 +602,26 @@ void validate_target_options(DeviceContext& device, const EngineOptions& options
         }
         break;
     }
+    // Each binary carries code for exactly one execution architecture; there is
+    // no PTX bridge between 90a and 120a, so a mismatched device must fail here
+    // with the detected GPU named, instead of at the first kernel launch.
+#if NINFER_EXECUTION_SM == 120
     if (device.sm() != 120) {
-        throw std::invalid_argument("Qwen3.6 family runtime requires compute capability 12.0");
+        throw std::invalid_argument(
+            "this NInfer binary was built for sm_120a (RTX 5090), but the device is "
+            "'" + std::string(device.props.name) + "' (compute capability " +
+            std::to_string(device.props.major) + "." + std::to_string(device.props.minor) +
+            "); rebuild with -DCMAKE_CUDA_ARCHITECTURES=90a for an H100");
     }
+#else
+    if (device.sm() != 90) {
+        throw std::invalid_argument(
+            "this NInfer binary was built for sm_90a (H100), but the device is "
+            "'" + std::string(device.props.name) + "' (compute capability " +
+            std::to_string(device.props.major) + "." + std::to_string(device.props.minor) +
+            "); rebuild with the default CMAKE_CUDA_ARCHITECTURES=120a for an RTX 5090");
+    }
+#endif
 }
 
 std::unique_ptr<SequencePlanImpl> build_sequence_candidate(const SequencePlanningInputs& inputs,

@@ -118,7 +118,13 @@ int run(const Options& options) {
     ninfer::DeviceBuffer flush(options.flush_size);
     WorkspaceArena workspace(1);
 
-    std::printf("# gpu=RTX_5090 cuda=13.1 sm=120a flush_mib=%zu warmup=%d repeat=%d\n",
+    int bench_device      = 0;
+    cudaDeviceProp props{};
+    if (cudaGetDevice(&bench_device) == cudaSuccess) {
+        (void)cudaGetDeviceProperties(&props, bench_device);
+    }
+    std::printf("# gpu=%s cuda=%d.%d sm=%d.%d flush_mib=%zu warmup=%d repeat=%d\n", props.name,
+                CUDA_VERSION / 1000, (CUDA_VERSION % 1000) / 10, props.major, props.minor,
                 options.flush_size >> 20, options.warmup, options.repeat);
     std::printf("%4s %5s %10s %10s %10s %-24s %s\n", "T", "nodes", "median_us", "min_us", "p95_us",
                 "head_route", "argmax_route");
