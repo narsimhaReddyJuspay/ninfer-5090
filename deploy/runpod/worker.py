@@ -49,6 +49,7 @@ _FLAG_ENV = {
     "NINFER_SPEC": "--spec",
     "NINFER_DRAFT_TOKENS": "--draft-tokens",
     "NINFER_MODEL_ID": "--model-id",
+    "NINFER_API_KEY": "--api-key",  # unset/empty => engine serves without auth
 }
 _DEFAULTS = {
     "NINFER_MAX_CONTEXT": "8192",
@@ -133,12 +134,10 @@ def ensure_running():
             return
         started = time.monotonic()
         try:
-            _serve_proc = subprocess.Popen(
-                _serve_cmd(),
-                stdout=subprocess.PIPE,
-                stderr=subprocess.STDOUT,
-                text=True,
-            )
+            # Inherit this process's stdout/stderr: RunPod captures container
+            # logs, and a PIPE that is never drained would deadlock the engine
+            # once its log output fills the OS pipe buffer (~64 KB).
+            _serve_proc = subprocess.Popen(_serve_cmd())
         except OSError as error:
             raise RuntimeError(
                 f"failed to launch ninfer-serve at {SERVE_BIN}: {error}"
@@ -149,9 +148,9 @@ def ensure_running():
                 _start_error = None
                 return
             if _serve_proc.poll() is not None:
-                output = _serve_proc.stdout.read(4000) if _serve_proc.stdout else ""
                 raise RuntimeError(
-                    f"ninfer-serve exited with code {_serve_proc.returncode}: {output}"
+                    f"ninfer-serve exited with code {_serve_proc.returncode} "
+                    f"(engine output is in the worker logs above)"
                 )
             time.sleep(1)
         raise RuntimeError(
@@ -169,12 +168,27 @@ def _metrics_loop(interval):
     read_once(GPU_INDEX, tracker)  # prime the CPU delta
     while True:
         time.sleep(interval)
-        print(f"[metrics] {format_sample(read_once(GPU_INDEX, tracker))}", flush=True)
+        try:
+            print(f"[metrics] {format_sample(read_once(GPU_INDEX, tracker))}", flush=True)
+        except Exception as error:  # keep the loop alive; a bad sample is not fatal
+            print(f"[metrics] error: {error!r}", flush=True)
 
 
 def _bootstrap():
-    """Boot path: load the engine, then keep utilization logging alive."""
+    """Boot path: log the host GPU/driver, load the engine, keep metrics alive."""
     global _start_error
+    try:
+        from serve_metrics import read_driver
+
+        driver = read_driver(GPU_INDEX)
+        if driver:
+            # CUDA 13.1 needs an r580+ driver; this line makes a mismatch visible.
+            print(
+                f"[worker] host: {driver['name']} driver={driver['driver_version']}",
+                flush=True,
+            )
+    except ImportError:
+        pass
     try:
         ensure_running()
         print(f"[worker] engine ready: {MODEL}", flush=True)
@@ -194,13 +208,13 @@ def handler(job):
     if _preload_attempted and not _ready.is_set():
         if not _ready.wait(timeout=LOAD_TIMEOUT_S + 120):
             raise RuntimeError("engine still loading from a cold start; retry the job")
-    if _start_error is not None:
-        raise RuntimeError(f"engine failed to start: {_start_error}")
     body = job.get("input") or {}
     route = "/v1/chat/completions"
     if "payload" in body:
         route = body.get("route", route)
         body = body["payload"]
+    # A boot-time failure may be transient (slow volume mount); every job gets a
+    # fresh ensure_running() attempt instead of failing forever on a stale error.
     ensure_running()
     if body.get("stream"):
         return _stream(route, body)
@@ -213,7 +227,15 @@ def _stream(route, payload):
         data=json.dumps(payload).encode(),
         headers={"Content-Type": "application/json"},
     )
-    with urllib.request.urlopen(request, timeout=REQUEST_TIMEOUT_S) as response:
+    try:
+        response = urllib.request.urlopen(request, timeout=REQUEST_TIMEOUT_S)
+    except urllib.error.HTTPError as error:
+        # Relay engine 4xx/5xx as a first chunk so the client sees the status and
+        # message instead of a job-level traceback.
+        detail = error.read().decode("utf-8", "replace")[:2000]
+        yield {"error": {"status": error.code, "message": detail}}
+        return
+    with response:
         for raw in response:
             line = raw.decode("utf-8", "replace").strip()
             if not line.startswith("data:"):

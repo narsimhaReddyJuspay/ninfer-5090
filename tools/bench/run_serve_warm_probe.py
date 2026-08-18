@@ -130,13 +130,20 @@ def measure_ttft_ms(
     first_token_s: Optional[float] = None
     content_chunks = 0
     total_chars = 0
-    for chunk, arrived in stream_chat(base_url, payload, timeout=600):
-        delta = (chunk.get("choices") or [{}])[0].get("delta", {}) if chunk.get("choices") else {}
-        if delta.get("content"):
-            content_chunks += 1
-            total_chars += len(delta["content"])
-            if first_token_s is None:
-                first_token_s = arrived
+    try:
+        for chunk, arrived in stream_chat(base_url, payload, timeout=600):
+            delta = (
+                (chunk.get("choices") or [{}])[0].get("delta", {}) if chunk.get("choices") else {}
+            )
+            if delta.get("content"):
+                content_chunks += 1
+                total_chars += len(delta["content"])
+                if first_token_s is None:
+                    first_token_s = arrived
+    except Exception as error:
+        # A failed trial is recorded, not raised: one flaky request must not
+        # discard the whole campaign's measurements.
+        return {"ttft_ms": None, "stream_ms": None, "error": repr(error)}
     finished = time.monotonic()
     return {
         "ttft_ms": (first_token_s - started) * 1000.0 if first_token_s is not None else None,
@@ -159,7 +166,10 @@ def decode_throughput(
 
     def one_request(_: int) -> Dict[str, Any]:
         started = time.monotonic()
-        body = post_json(base_url, "/v1/chat/completions", payload, timeout=1800)
+        try:
+            body = post_json(base_url, "/v1/chat/completions", payload, timeout=1800)
+        except Exception as error:
+            return {"elapsed_s": None, "error": repr(error)}
         elapsed = time.monotonic() - started
         usage = body.get("usage") or {}
         return {
@@ -172,14 +182,17 @@ def decode_throughput(
     with ThreadPoolExecutor(max_workers=concurrency) as pool:
         results = list(pool.map(one_request, range(concurrency)))
     wall_s = time.monotonic() - started
-    token_counts = [r["completion_tokens"] for r in results if r["completion_tokens"]]
+    failures = [r for r in results if r.get("error")]
+    successes = [r for r in results if not r.get("error")]
+    token_counts = [r["completion_tokens"] for r in successes if r["completion_tokens"]]
     aggregate = sum(token_counts) / wall_s if token_counts else None
-    per_stream = [r["completion_tokens"] / r["elapsed_s"] for r in results if r["completion_tokens"]]
+    per_stream = [r["completion_tokens"] / r["elapsed_s"] for r in successes if r["completion_tokens"]]
     return {
         "concurrency": concurrency,
         "wall_s": wall_s,
         "aggregate_tok_s": aggregate,
         "per_stream_tok_s_mean": (sum(per_stream) / len(per_stream)) if per_stream else None,
+        "failed_requests": len(failures),
         "requests": results,
     }
 
@@ -196,7 +209,16 @@ def thinking_task(
         "enable_thinking": True,
     }
     started = time.monotonic()
-    body = post_json(base_url, "/v1/chat/completions", payload, timeout=1800)
+    try:
+        body = post_json(base_url, "/v1/chat/completions", payload, timeout=1800)
+    except Exception as error:
+        return {
+            "latency_s": None,
+            "completion_tokens": None,
+            "reasoning_chars": None,
+            "answer_chars": None,
+            "error": repr(error),
+        }
     elapsed = time.monotonic() - started
     usage = body.get("usage") or {}
     choice = (body.get("choices") or [{}])[0]
@@ -230,6 +252,24 @@ def run(args: argparse.Namespace) -> Dict[str, Any]:
     sampler = serve_metrics.MetricsSampler(interval_s=args.metrics_interval, gpu_index=args.gpu_index)
     sampler.start()
 
+    try:
+        _run_measurements(args, report)
+    finally:
+        # Always stop the sampler and write artifacts: a failed phase must not
+        # discard the measurements already collected.
+        summary = sampler.stop()
+        report["metrics"] = summary.as_dict()
+        print(summary.format())
+        if args.metrics_csv:
+            sampler.write_csv(args.metrics_csv)
+            print(f"metrics time-series written to {args.metrics_csv}")
+        if args.out:
+            Path(args.out).write_text(json.dumps(report, indent=2), encoding="utf-8")
+            print(f"report written to {args.out}")
+    return report
+
+
+def _run_measurements(args: argparse.Namespace, report: Dict[str, Any]) -> None:
     prefix_messages: List[Dict[str, str]] = [
         {"role": "system", "content": SYSTEM_PREFIX},
         {"role": "user", "content": "Acknowledge the operational context in one sentence."},
@@ -273,10 +313,11 @@ def run(args: argparse.Namespace) -> Dict[str, Any]:
     for concurrency in args.concurrency:
         result = decode_throughput(args.base_url, args.model, concurrency, args.decode_tokens, prefix_messages)
         report["decode"].append(result)
+        failed = f"  [{result['failed_requests']} failed]" if result["failed_requests"] else ""
         print(
             f"  c={concurrency}: {concurrency * args.decode_tokens} tok in {_fmt(result['wall_s'], 2)}s"
             f" -> {_fmt(result['aggregate_tok_s'])} tok/s aggregate"
-            f" ({_fmt(result['per_stream_tok_s_mean'])} per stream)"
+            f" ({_fmt(result['per_stream_tok_s_mean'])} per stream){failed}"
         )
 
     print("thinking tasks:")
@@ -284,22 +325,11 @@ def run(args: argparse.Namespace) -> Dict[str, Any]:
         result = thinking_task(args.base_url, args.model, task, args.thinking_cap, prefix_messages)
         result["task"] = task
         report["thinking"].append(result)
+        error_suffix = f"  [{result['error']}]" if result.get("error") else ""
         print(
             f"  task {index}: {_fmt(result['latency_s'], 2)}s end-to-end,"
-            f" {result['completion_tokens']} completion tokens"
+            f" {result['completion_tokens']} completion tokens{error_suffix}"
         )
-
-    summary = sampler.stop()
-    report["metrics"] = summary.as_dict()
-    print(summary.format())
-
-    if args.metrics_csv:
-        sampler.write_csv(args.metrics_csv)
-        print(f"metrics time-series written to {args.metrics_csv}")
-    if args.out:
-        Path(args.out).write_text(json.dumps(report, indent=2), encoding="utf-8")
-        print(f"report written to {args.out}")
-    return report
 
 
 def main(argv: Optional[Sequence[str]] = None) -> int:

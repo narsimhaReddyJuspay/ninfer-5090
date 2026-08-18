@@ -36,9 +36,14 @@ RUN cmake -S . -B /build -G Ninja \
 FROM nvidia/cuda:13.1.2-runtime-ubuntu24.04
 
 ARG DEBIAN_FRONTEND=noninteractive
+# cuda-compat carries forward-compatibility libcuda for datacenter GPUs (H100):
+# it lets this CUDA 13.1 engine run on hosts whose driver predates the r580
+# branch that CUDA 13.1 normally requires. RunPod fleet drivers roll out
+# unevenly and cannot be pinned per endpoint.
 RUN apt-get update \
     && apt-get install --yes --no-install-recommends \
         ca-certificates \
+        cuda-compat-13-1 \
         libavcodec60 \
         libavformat60 \
         libavutil58 \
@@ -47,7 +52,9 @@ RUN apt-get update \
         python3 \
         python3-pip \
     && rm -rf /var/lib/apt/lists/* \
-    && pip3 install --break-system-packages --no-cache-dir runpod
+    && pip3 install --break-system-packages --no-cache-dir runpod==1.12.0
+
+ENV LD_LIBRARY_PATH=/usr/local/cuda/compat:${LD_LIBRARY_PATH:-}
 
 COPY --from=build /build/apps/ninfer-serve /usr/local/bin/ninfer-serve
 COPY deploy/runpod/worker.py /app/worker.py

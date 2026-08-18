@@ -5,6 +5,7 @@
 .idea
 .pytest_cache
 .vscode
+.zcode
 
 build
 build-*

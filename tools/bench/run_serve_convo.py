@@ -26,6 +26,8 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
+from tools.bench.serve_metrics import percentile  # noqa: E402
+
 SYSTEM_PROMPT = (
     "You are the clairvoyance payments assistant for a large Indian payment "
     "processor. You help operations engineers with UPI, card settlements, "
@@ -49,11 +51,6 @@ ITL_FLUID_MS = 80.0
 ITL_CHUNKY_MS = 150.0
 
 
-def percentile(sorted_values: Sequence[float], fraction: float) -> float:
-    index = min(len(sorted_values) - 1, max(0, int(round(fraction * (len(sorted_values) - 1)))))
-    return sorted_values[index]
-
-
 def run_turn(client: Any, model: str, messages: List[Dict[str, Any]], args: argparse.Namespace) -> Dict[str, Any]:
     request = {
         "model": model,
@@ -73,6 +70,7 @@ def run_turn(client: Any, model: str, messages: List[Dict[str, Any]], args: argp
     reasoning_chars = 0
     answer_chars = 0
     answer_parts: List[str] = []
+    use_ansi = args.live and sys.stdout.isatty()
 
     stream = client.chat.completions.create(**request)
     for chunk in stream:
@@ -85,7 +83,8 @@ def run_turn(client: Any, model: str, messages: List[Dict[str, Any]], args: argp
         if reasoning:
             reasoning_chars += len(reasoning)
             if args.live:
-                sys.stdout.write(f"\033[2m{reasoning}\033[0m")
+                text = f"\033[2m{reasoning}\033[0m" if use_ansi else reasoning
+                sys.stdout.write(text)
                 sys.stdout.flush()
         if content:
             answer_chars += len(content)
@@ -140,14 +139,22 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         print("error: the openai package is required (pip install openai)", file=sys.stderr)
         return 2
 
+    if args.turns <= 0:
+        print("no turns requested; nothing to do")
+        return 0
+
     client = OpenAI(base_url=args.base_url, api_key=args.api_key)
-    server_models = [m.id for m in client.models.list()]
+    try:
+        server_models = [m.id for m in client.models.list()]
+    except Exception as error:
+        server_models = []
+        print(f"note: could not list server models ({error}); using '{args.model}' as-is")
     if server_models and args.model not in server_models:
         print(f"note: model '{args.model}' not in server list {server_models}; using {server_models[0]}")
         args.model = server_models[0]
 
     messages: List[Dict[str, Any]] = [{"role": "system", "content": SYSTEM_PROMPT}]
-    turns = CONVERSATION_TURNS[: max(1, args.turns)]
+    turns = CONVERSATION_TURNS[: args.turns]
     results: List[Dict[str, Any]] = []
 
     print(f"conversation: model={args.model} thinking={'on' if args.thinking else 'off'} "
@@ -161,7 +168,9 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         result["turn"] = index
         result["user"] = user_text
         results.append(result)
-        messages.append({"role": "assistant", "content": result["answer"]})
+        # Keep the conversation structurally valid even if the engine emitted
+        # nothing (an empty assistant turn can 400 the next request).
+        messages.append({"role": "assistant", "content": result["answer"] or "(no content)"})
 
     def cell(value: Optional[float], spec: str) -> str:
         return format(value, spec) if value is not None else "n/a"

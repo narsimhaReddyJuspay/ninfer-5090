@@ -1,0 +1,39 @@
+name: serverless-image
+
+# Builds and pushes the RunPod serverless worker image (H100, sm_90a) to GHCR.
+# Trigger manually from the Actions tab ("Run workflow"); expect 1-2h on the
+# free 4-core runner. The resulting image is
+# ghcr.io/<owner>/ninfer-h100-serverless:latest — make the package public (or
+# configure registry credentials in RunPod) before referencing it.
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  packages: write
+
+jobs:
+  build-push:
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+    steps:
+      - uses: actions/checkout@v4
+
+      # GHCR requires lowercase image names; repository owners may contain caps.
+      - name: Lowercase owner for GHCR
+        run: echo "OWNER=${GITHUB_REPOSITORY_OWNER,,}" >> "$GITHUB_ENV"
+
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: deploy/runpod/Dockerfile.serverless
+          push: true
+          tags: |
+            ghcr.io/${{ env.OWNER }}/ninfer-h100-serverless:latest
+            ghcr.io/${{ env.OWNER }}/ninfer-h100-serverless:${{ github.sha }}

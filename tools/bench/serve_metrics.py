@@ -38,7 +38,10 @@ def read_gpu(gpu_index: int = 0) -> Optional[Dict[str, Optional[float]]]:
         return None
     if result.returncode != 0:
         return None
-    parts = result.stdout.strip().splitlines()[0].split(",")
+    lines = result.stdout.strip().splitlines()
+    if not lines:
+        return None
+    parts = lines[0].split(",")
     if len(parts) != len(GPU_FIELDS):
         return None
 
@@ -50,6 +53,33 @@ def read_gpu(gpu_index: int = 0) -> Optional[Dict[str, Optional[float]]]:
 
     values = {name: _num(raw) for name, raw in zip(GPU_FIELDS, parts)}
     return values if any(v is not None for v in values.values()) else None
+
+
+def read_driver(gpu_index: int = 0) -> Optional[Dict[str, str]]:
+    """GPU name and driver version, for boot-time logging on GPU hosts."""
+    try:
+        result = subprocess.run(
+            [
+                "nvidia-smi",
+                f"--id={gpu_index}",
+                "--query-gpu=name,driver_version",
+                "--format=csv,noheader",
+            ],
+            capture_output=True,
+            text=True,
+            timeout=10,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return None
+    if result.returncode != 0:
+        return None
+    lines = result.stdout.strip().splitlines()
+    if not lines:
+        return None
+    parts = [part.strip() for part in lines[0].split(",", 1)]
+    if len(parts) != 2:
+        return None
+    return {"name": parts[0], "driver_version": parts[1]}
 
 
 class CpuTracker:
@@ -115,7 +145,8 @@ class Summary:
         return {"duration_s": self.duration_s, "count": self.count, "stats": self.stats}
 
 
-def _percentile(sorted_values: Sequence[float], fraction: float) -> float:
+def percentile(sorted_values: Sequence[float], fraction: float) -> float:
+    """Percentile of an already-sorted sequence; shared by the bench harnesses."""
     index = min(len(sorted_values) - 1, max(0, int(round(fraction * (len(sorted_values) - 1)))))
     return sorted_values[index]
 
@@ -155,7 +186,9 @@ class MetricsSampler:
     def stop(self) -> Summary:
         self._stop.set()
         if self._thread is not None:
-            self._thread.join(timeout=self.interval_s * 4 + 5)
+            # One in-flight nvidia-smi call can take up to ~10s; never abandon it
+            # mid-sample or the summary and CSV would disagree by one row.
+            self._thread.join(timeout=max(self.interval_s * 4 + 5, 15))
         duration = time.monotonic() - self._start_monotonic if self._samples else 0.0
         stats: Dict[str, Optional[Dict[str, float]]] = {}
         for name in ("cpu_util_pct", *GPU_FIELDS):
@@ -168,8 +201,8 @@ class MetricsSampler:
                 continue
             stats[name] = {
                 "mean": sum(values) / len(values),
-                "p50": _percentile(values, 0.50),
-                "p95": _percentile(values, 0.95),
+                "p50": percentile(values, 0.50),
+                "p95": percentile(values, 0.95),
                 "max": values[-1],
             }
         return Summary(duration_s=duration, count=len(self._samples), stats=stats)

@@ -62,6 +62,7 @@ Worker environment variables (all optional):
 | `NINFER_PRELOAD` | `1` | load the engine at worker boot, not on first job |
 | `NINFER_METRICS_INTERVAL_S` | `30` | `[metrics] cpu/gpu/vram/power/temp` lines in worker logs; `0` disables |
 | `NINFER_KV_CAPACITY`, `NINFER_MODEL_ID` | unset | pass through to ninfer-serve |
+| `NINFER_API_KEY` | unset | pass through as the engine's `--api-key` (unset/empty = no auth) |
 | `NINFER_SERVE_ARGS` | empty | extra raw flags, e.g. `--prefill-chunk 1024 --kv-dtype int8` |
 | `NINFER_LOAD_TIMEOUT_S` | `900` | cold-start budget for volume load + warmup |
 
@@ -143,7 +144,7 @@ pod or local GPU) works with the same client and no bridge.
 |---|---|
 | Warm request | engine TTFT (~50-300 ms) + RunPod dispatch (~100-300 ms) ≈ 200-600 ms to first token |
 | Cold request (first after idle) | + 30-90 s volume load + graph capture — one-time per idle period |
-| India client | + ~150-250 ms RTT; RunPod has no India region, so the worker sits US/EU |
+| India client | RunPod's AP-IN-1 India datacenter is live (H100-focused), but the announcement covers pods; check the console for serverless H100 in AP-IN-1 before assuming US/EU placement and its ~150-250 ms RTT |
 
 Notes that matter:
 
@@ -155,15 +156,24 @@ Notes that matter:
 - A scheduled keep-warm ping from clairvoyance (one tiny generation every few
   minutes during business hours) holds one worker active, converting cold starts
   into warm ones for the hours you actually pay for.
+- **Driver check on first cold start:** this CUDA 13.1 build needs an r580+
+  host driver. The image carries `cuda-compat-13-1` (forward compatibility for
+  datacenter GPUs), and the worker logs `[worker] host: <GPU> driver=<version>`
+  at boot — verify that line before relying on the endpoint.
+- H100 PCIe works as well as SXM (the engine derives occupancy from the device
+  at runtime, e.g. 114 vs 132 SMs); on the pod lane PCIe is cheaper still.
 - Flash (`runpod-flash`) is fine for iterating handler logic locally with
   `flash dev`, but deploy the standard RunPod serverless endpoint with this
   custom image: the engine binary requires the sm_90a CUDA build that Flash's
   default packaging does not carry.
 
-## Cost shape (why serverless here)
+## Cost shape (serverless rates)
 
-At H100 ≈ $2.8-3.3/hr per active worker: paying only for active time beats a
-24/7 pod (~$2,000-2,400/mo) below roughly 25-30% GPU utilization. A clairvoyance
-trial doing a few hours of GPU-active work per day lands around $150-250/mo plus
-~$4-8/mo for the network volume. If steady utilization climbs past a quarter of
-the day, a pod becomes cheaper again.
+RunPod serverless H100 80GB bills **$4.79/hr** per active worker (per-second),
+which is *more* per hour than a dedicated H100 SXM pod at $3.29/hr ($2.89 PCIe,
+$2.69 community). Serverless wins only through scale-to-zero: break-even versus
+a 24/7 $3.29 pod is ~69% active time. A clairvoyance trial doing a few
+GPU-active hours per day lands around $240-430/mo plus ~$5/mo for the network
+volume; the same always-on hours on a pod cost more below ~16 h/day of active
+use. If steady utilization climbs past roughly two-thirds of the day, a pod is
+cheaper — and at that point a pod is likely the right product shape anyway.

@@ -34,6 +34,10 @@ import runpod
 
 ENDPOINT_ID: Optional[str] = None
 MODEL_NAME = "ninfer"
+# The runpod SDK's Job.output() defaults to timeout=0, i.e. a single fetch that
+# returns None while the job is queued or running; always poll with a real
+# budget covering a cold start plus the longest expected generation.
+JOB_TIMEOUT_S = 1800
 _endpoint: Optional[Any] = None
 _endpoint_lock = threading.Lock()
 
@@ -132,7 +136,13 @@ class BridgeHandler(BaseHTTPRequestHandler):
 
     def _relay_final(self, job: Any) -> None:
         try:
-            output = job.output()
+            output = job.output(timeout=JOB_TIMEOUT_S)
+        except TimeoutError:
+            self._send_json(
+                504,
+                {"error": {"message": f"runpod job did not complete within {JOB_TIMEOUT_S}s"}},
+            )
+            return
         except Exception as error:
             self._send_json(502, {"error": {"message": f"runpod job failed: {error}"}})
             return
@@ -151,20 +161,27 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     parser.add_argument("--endpoint-id", default=os.environ.get("RUNPOD_ENDPOINT_ID"),
                         help="RunPod serverless endpoint id (or RUNPOD_ENDPOINT_ID)")
     parser.add_argument("--port", type=int, default=8081)
+    parser.add_argument("--bind", default="127.0.0.1",
+                        help="listen address; 0.0.0.0 exposes an unauthenticated "
+                             "billable proxy - only on trusted networks")
+    parser.add_argument("--job-timeout", type=int, default=1800,
+                        help="seconds to wait for a non-streaming job (default 1800)")
     parser.add_argument("--model-name", default=os.environ.get("NINFER_MODEL_ID", "ninfer"),
                         help="model id advertised at /v1/models")
     args = parser.parse_args(argv)
 
-    global ENDPOINT_ID, MODEL_NAME
+    global ENDPOINT_ID, MODEL_NAME, JOB_TIMEOUT_S
     if not args.endpoint_id:
         print("error: --endpoint-id or RUNPOD_ENDPOINT_ID is required", file=sys.stderr)
         return 2
     ENDPOINT_ID = args.endpoint_id
     MODEL_NAME = args.model_name
+    JOB_TIMEOUT_S = args.job_timeout
 
-    server = ThreadingHTTPServer(("0.0.0.0", args.port), BridgeHandler)
-    print(f"bridge listening on http://0.0.0.0:{args.port}/v1 -> runpod endpoint {ENDPOINT_ID}")
-    print(f"openai base_url: http://127.0.0.1:{args.port}/v1 (model '{MODEL_NAME}')")
+    server = ThreadingHTTPServer((args.bind, args.port), BridgeHandler)
+    display_host = "127.0.0.1" if args.bind == "0.0.0.0" else args.bind
+    print(f"bridge listening on http://{args.bind}:{args.port}/v1 -> runpod endpoint {ENDPOINT_ID}")
+    print(f"openai base_url: http://{display_host}:{args.port}/v1 (model '{MODEL_NAME}')")
     try:
         server.serve_forever()
     except KeyboardInterrupt:
