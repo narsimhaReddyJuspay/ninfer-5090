@@ -52,7 +52,8 @@ std::int32_t gqa_small_t_split_count(std::int32_t window, std::int32_t tokens, D
         return div_up(window, 24 / Geometry::DecodeSplitScale);
     }
     // Bc=64 is one CTA/SM on these model shapes. Keep the 8K grid at or below
-    // one 170-SM wave after accounting for the geometry's KV-head count.
+    // one RTX 5090 (170-SM) wave after accounting for the geometry's KV-head
+    // count; the cap is a 5090-measured tuning, not a residency limit.
     if (kv_dtype == DType::I8 && tokens == 6 && window > 5000 && window <= 8198) {
         const std::int32_t splits   = div_up(window, 192 / Geometry::DecodeSplitScale);
         constexpr std::int32_t kMin = 4 * Geometry::DecodeSplitScale;

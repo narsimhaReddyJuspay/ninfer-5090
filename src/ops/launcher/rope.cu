@@ -2,19 +2,13 @@
 #include "ops/launcher/rope.h"
 
 #include "core/device.h" // CUDA_CHECK
+#include "ops/common/device_topology.h"
 #include "ops/kernel/rope.cuh"
 
 #include <cstdint>
 
 namespace ninfer::ops::detail {
 namespace {
-
-constexpr int kLargeBlock               = 256;
-constexpr int kFullChunkBlock           = 192;
-constexpr int kSmallBlock               = 128;
-constexpr int kDefaultChunkTargetTokens = 1024;
-// RTX 5090 has 170 SMs and admits six of these 256-thread CTAs per SM.
-constexpr int kLargeBlockWaveCapacity = 1020;
 
 template <RopeKernelMode Mode>
 inline constexpr bool kTextMode =
@@ -44,14 +38,14 @@ void launch_fixed_block(const Tensor& positions, Tensor* q, Tensor* k, int block
 template <RopeKernelMode Mode, int QHeads, int KHeads>
 void launch_fixed(const Tensor& positions, Tensor* q, Tensor* k, cudaStream_t stream) {
     const int tokens = positions.ne[0];
-    int block        = kSmallBlock;
+    int block        = kRopeSmallBlock;
     if constexpr (kTextMode<Mode>) {
         if (tokens <= 6) {
             block = (QHeads + KHeads) * 32;
-        } else if (tokens <= kLargeBlockWaveCapacity) {
-            block = kLargeBlock;
-        } else if (tokens <= kDefaultChunkTargetTokens) {
-            block = kFullChunkBlock;
+        } else if (tokens <= kRopeLargeBlockCtasPerSm * device_sm_count()) {
+            block = kRopeLargeBlock;
+        } else if (tokens <= kRopeDefaultChunkTarget) {
+            block = kRopeFullChunkBlock;
         }
         const int head_warps = (QHeads + KHeads) * 32;
         if (block > head_warps) { block = head_warps; }

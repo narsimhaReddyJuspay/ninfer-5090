@@ -90,9 +90,14 @@ struct TokenSweep {
 
 struct Options {
     TokenSweep tokens;
-    Format format                  = Format::Q4Q5;
-    Form form                      = Form::Snapshot;
+    Format format = Format::Q4Q5;
+    Form form     = Form::Snapshot;
+#ifdef NINFER_NVFP4_W4A4
     ops::LinearPolicy nvfp4_policy = ops::LinearPolicy::AllowA4;
+#else
+    // The 90a build compiles no W4A4 kernels; default to the portable route.
+    ops::LinearPolicy nvfp4_policy = ops::LinearPolicy::A16Only;
+#endif
     ops::LinearPolicy fp8_policy   = ops::LinearPolicy::AllowA8;
     Execution execution            = Execution::Graph;
     CacheMode cache                = CacheMode::Both;

@@ -31,6 +31,13 @@ struct alignas(8) Nvfp4QuantizedK16 {
 
 static_assert(alignof(Nvfp4QuantizedK16) == 8);
 
+// The E2M1 activation pack converts through cvt.rn.satfinite.e2m1x2.f32, which
+// only the Blackwell FP4 tensor-core architectures implement. These helpers are
+// called only by the W4A4 kernel headers, whose translation units the 90a build
+// excludes entirely; the definitions stay unconditional because nvcc parses
+// __device__ bodies in the host pass, where the arch feature macros are absent.
+// The decode helpers above remain in use on sm_90a through the A16
+// GEMV/small-T kernels, which include this header.
 __device__ __forceinline__ void
 pack_nvfp4_e2m1x16(const float2 (&values)[8], std::uint32_t& codes_lo, std::uint32_t& codes_hi) {
     asm volatile("{\n"

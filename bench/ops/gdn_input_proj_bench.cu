@@ -36,8 +36,13 @@ enum class CacheMode : std::uint8_t { Cold, Warm, Both };
 enum class CacheState : std::uint8_t { Cold, Warm };
 
 struct Options {
-    Format format                  = Format::All;
+    Format format = Format::All;
+#ifdef NINFER_NVFP4_W4A4
     ops::LinearPolicy nvfp4_policy = ops::LinearPolicy::AllowA4;
+#else
+    // The 90a build compiles no W4A4 kernels; default to the portable route.
+    ops::LinearPolicy nvfp4_policy = ops::LinearPolicy::A16Only;
+#endif
     ops::LinearPolicy fp8_policy   = ops::LinearPolicy::AllowA8;
     CacheMode cache                = CacheMode::Cold;
     std::vector<std::int32_t> tokens{1, 2, 4, 8, 12, 16, 32, 64, 128, 256, 512, 1024};
