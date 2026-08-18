@@ -98,7 +98,12 @@ struct Options {
     // The 90a build compiles no W4A4 kernels; default to the portable route.
     ops::LinearPolicy nvfp4_policy = ops::LinearPolicy::A16Only;
 #endif
+    // The 90a build compiles no W8A8 kernels either; default to the portable route.
+#ifdef NINFER_FP8_W8A8
     ops::LinearPolicy fp8_policy   = ops::LinearPolicy::AllowA8;
+#else
+    ops::LinearPolicy fp8_policy   = ops::LinearPolicy::A16Only;
+#endif
     Execution execution            = Execution::Graph;
     CacheMode cache                = CacheMode::Both;
     int warmup                     = 10;

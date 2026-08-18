@@ -480,8 +480,12 @@ int run_fp8_oracle_case(DevicePackedWeight& parent, std::int32_t width, std::int
         }
     }
 
+#ifdef NINFER_FP8_W8A8
     const bool uses_a8 =
         policy == ops::LinearPolicy::AllowA8 && (batch == 1 ? width >= 10 : width * batch >= 8);
+#else
+    const bool uses_a8 = false; // AllowA8 degrades to the A16 route on sm_90a
+#endif
     const ReductionCriterion& criterion =
         uses_a8 ? kFp8GdnInputProjConvRecordA8Tolerance : kFp8GdnInputProjConvRecordA16Tolerance;
     const std::string label = std::string("FP8 ") + (uses_a8 ? "A8" : "A16") +

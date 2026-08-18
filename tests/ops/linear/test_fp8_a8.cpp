@@ -109,6 +109,12 @@ int run_fp8_a8() {
 } // namespace
 
 int main() {
+#ifndef NINFER_FP8_W8A8
+    // The A8 route and its workspace-interval contract exist only in the
+    // 120a build; on sm_90a AllowA8 degrades to A16 (covered by test_fp8_a16).
+    std::cout << "SKIP: FP8 W8A8 tensor-core routes require the 120a build\n";
+    return 77;
+#else
     if (!ninfer::test::linear::cuda_available()) {
         std::cout << "SKIP: no usable CUDA device\n";
         return 77;
@@ -121,4 +127,5 @@ int main() {
         std::cerr << "FP8 A8 Linear: " << error.what() << '\n';
         return 1;
     }
+#endif
 }

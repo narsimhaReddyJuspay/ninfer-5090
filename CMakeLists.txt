@@ -16,12 +16,15 @@ endif()
 project(ninfer LANGUAGES C CXX CUDA)
 
 # The NVFP4 W4A4 kernels execute on the Blackwell block-scaled FP4 tensor
-# cores, which sm_90a does not implement. Only the 120a build compiles those
-# kernels; every other target carries the portable nvfp4 A16 routes only.
+# cores, which sm_90a does not implement. The FP8 W8A8 kernels likewise emit the
+# Ada-family mma.sync.kind::f8f6f4 instruction, which Hopper does not implement
+# (Hopper FP8 tensor cores use the typed e4m3/e5m2 form instead). Only the 120a
+# build compiles those kernel families; every other target carries the portable
+# A16 routes only, and the plan-level dispatch degrades AllowA8 to A16.
 # NINFER_EXECUTION_SM records the one architecture this binary carries code
 # for; the runtime validates the device against exactly this value.
 if(CMAKE_CUDA_ARCHITECTURES STREQUAL "120a")
-  add_compile_definitions(NINFER_NVFP4_W4A4=1 NINFER_EXECUTION_SM=120)
+  add_compile_definitions(NINFER_NVFP4_W4A4=1 NINFER_FP8_W8A8=1 NINFER_EXECUTION_SM=120)
 else()
   add_compile_definitions(NINFER_EXECUTION_SM=90)
 endif()

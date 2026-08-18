@@ -34,6 +34,11 @@ Fp8LinearRoute resolve_route(std::int32_t output_rows, std::int32_t input_rows, 
         throw std::invalid_argument("fp8 linear: unsupported policy");
     }
 
+#ifndef NINFER_FP8_W8A8
+    // The W8A8 f8f6f4 tensor-core kernels are Ada/Blackwell-only; on sm_90a the
+    // permissive policy degrades to the portable A16 route.
+    return Fp8LinearRoute::A16;
+#else
     switch (problem) {
     case Fp8Problem::AttnInput:
         return tokens >= 12 ? Fp8LinearRoute::A8 : Fp8LinearRoute::A16;
@@ -48,6 +53,7 @@ Fp8LinearRoute resolve_route(std::int32_t output_rows, std::int32_t input_rows, 
         return tokens >= 25 ? Fp8LinearRoute::A8 : Fp8LinearRoute::A16;
     }
     throw std::logic_error("unreachable FP8 linear problem");
+#endif
 }
 
 void launch_a16(const Tensor& x, const Weight& weight, Tensor& out, cudaStream_t stream) {
@@ -75,6 +81,12 @@ void launch_a16(const Tensor& x, const Weight& weight, Tensor& out, cudaStream_t
 bool interval_uses_a8(Fp8Problem problem, LinearPolicy policy, std::int32_t min_tokens,
                       std::int32_t max_tokens) {
     if (policy == LinearPolicy::A16Only) { return false; }
+#ifndef NINFER_FP8_W8A8
+    (void)problem;
+    (void)min_tokens;
+    (void)max_tokens;
+    return false;
+#else
     switch (problem) {
     case Fp8Problem::AttnInput:
         return max_tokens >= 12;
@@ -89,6 +101,7 @@ bool interval_uses_a8(Fp8Problem problem, LinearPolicy policy, std::int32_t min_
         return max_tokens >= 25;
     }
     throw std::logic_error("unreachable FP8 linear problem");
+#endif
 }
 
 } // namespace
@@ -102,9 +115,14 @@ std::size_t fp8_linear_workspace_capacity_bytes(std::int32_t output_rows, std::i
     const Fp8Problem problem = resolve_fp8_problem(output_rows, input_rows);
     (void)resolve_route(output_rows, input_rows, policy, min_tokens);
     (void)resolve_route(output_rows, input_rows, policy, max_tokens);
+#ifdef NINFER_FP8_W8A8
     return interval_uses_a8(problem, policy, min_tokens, max_tokens)
                ? fp8_a8_workspace_capacity_bytes(max_tokens, input_rows)
                : 0;
+#else
+    (void)problem;
+    return 0;
+#endif
 }
 
 void fp8_dispatch(const Tensor& x, const Weight& weight, Tensor& out, LinearPolicy policy,
@@ -115,12 +133,14 @@ void fp8_dispatch(const Tensor& x, const Weight& weight, Tensor& out, LinearPoli
         launch_a16(x, weight, out, stream);
         return;
     }
+#ifdef NINFER_FP8_W8A8
     if (workspace == nullptr) {
         throw std::invalid_argument("fp8 A8 linear requires caller workspace");
     }
     auto scope                   = workspace->scope();
     const Fp8A8Workspace scratch = allocate_fp8_a8_workspace(*workspace, x.ne[1], weight.k);
     launch_fp8_a8(x, weight, out, scratch, stream);
+#endif
 }
 
 } // namespace ninfer::ops::detail

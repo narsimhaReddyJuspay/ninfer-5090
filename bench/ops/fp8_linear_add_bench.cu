@@ -31,8 +31,13 @@ constexpr std::size_t kFlushBytes       = 256ULL << 20;
 constexpr double kFp8Fp32AccumulatePeak = 419.0;
 
 struct Options {
-    std::int32_t k           = 0;
+    std::int32_t k = 0;
+    // The 90a build compiles no W8A8 kernels; default to the portable route.
+#ifdef NINFER_FP8_W8A8
     ops::LinearPolicy policy = ops::LinearPolicy::AllowA8;
+#else
+    ops::LinearPolicy policy = ops::LinearPolicy::A16Only;
+#endif
     std::vector<std::int32_t> t_sweep{1, 2, 4, 8, 16, 20, 21, 22, 24, 25, 32, 48, 1024};
     int warmup   = 5;
     int repeat   = 30;

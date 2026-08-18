@@ -24,7 +24,11 @@ Core MMA for prefill and A16 NVFP4 kernels for decode. The Qwen3.8 `nvfp4` profi
 source's mixed allocation: NVFP4 MLP weights in Text layers 0–55 and row-scaled FP8 for the token
 embedding, attention input/output projections, GDN Q/K/V/Z and output projections, output head, and
 remaining MLP weights. The `nvfp4` profiles require the RTX 5090 build: their W4A4 prefill kernels
-execute on the Blackwell block-scaled FP4 tensor cores, which the H100 does not implement. All four
+execute on the Blackwell block-scaled FP4 tensor cores, which the H100 does not implement. The FP8
+W8A8 tensor-core kernels are likewise compiled only into the 5090 build (their
+`mma.sync.kind::f8f6f4` instruction is absent on Hopper); the H100 build carries the portable FP8
+A16 routes instead. The `groupwise-int` artifacts contain no FP8 weights, so H100 deployments are
+unaffected. All four
 27B artifacts retain the same Text, Vision, MTP, prefix-reuse, CLI, and serving routes.
 
 ## Performance

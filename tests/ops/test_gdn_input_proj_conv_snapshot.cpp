@@ -890,7 +890,11 @@ int run_fp8_case(DevicePackedWeight& parent, std::int32_t tokens, ops::LinearPol
                 parent.host, row, activation.data() + static_cast<std::size_t>(token) * kHidden,
                 kHidden);
         });
-    const bool uses_a8                  = policy == ops::LinearPolicy::AllowA8 && tokens >= 10;
+#ifdef NINFER_FP8_W8A8
+    const bool uses_a8 = policy == ops::LinearPolicy::AllowA8 && tokens >= 10;
+#else
+    const bool uses_a8 = false; // AllowA8 degrades to the A16 route on sm_90a
+#endif
     const ReductionCriterion& criterion = uses_a8 ? kFp8GdnInputProjConvSnapshotA8Tolerance
                                                   : kFp8GdnInputProjConvSnapshotA16Tolerance;
     const std::string suffix =

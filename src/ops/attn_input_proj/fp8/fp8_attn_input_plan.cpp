@@ -20,7 +20,13 @@ Fp8AttnInputRoute resolve_route(LinearPolicy policy, std::int32_t tokens) {
     if (policy != LinearPolicy::AllowA8) {
         throw std::invalid_argument("fp8 attn_input_proj: unsupported policy");
     }
+#ifdef NINFER_FP8_W8A8
     return tokens >= 11 ? Fp8AttnInputRoute::A8 : Fp8AttnInputRoute::A16;
+#else
+    // The W8A8 f8f6f4 tensor-core kernels are Ada/Blackwell-only; on sm_90a the
+    // permissive policy degrades to the portable A16 route.
+    return Fp8AttnInputRoute::A16;
+#endif
 }
 
 void launch_a16(const Tensor& x, const Weight& weight, Tensor& q, Tensor& gate, Tensor& k,
@@ -63,9 +69,14 @@ std::size_t fp8_attn_input_workspace_capacity_bytes(LinearPolicy policy, std::in
         throw std::invalid_argument("fp8 attn_input_proj workspace: invalid token interval");
     }
     (void)resolve_route(policy, min_tokens);
+#ifdef NINFER_FP8_W8A8
     return resolve_route(policy, max_tokens) == Fp8AttnInputRoute::A8
                ? fp8_a8_workspace_capacity_bytes(max_tokens, Fp8AttnInputGeometry::kInputRows)
                : 0;
+#else
+    (void)resolve_route(policy, max_tokens);
+    return 0;
+#endif
 }
 
 void fp8_attn_input_dispatch(const Tensor& x, const Weight& weight, Tensor& q, Tensor& gate,
@@ -75,12 +86,14 @@ void fp8_attn_input_dispatch(const Tensor& x, const Weight& weight, Tensor& q, T
         launch_a16(x, weight, q, gate, k, v, stream);
         return;
     }
+#ifdef NINFER_FP8_W8A8
     if (workspace == nullptr) {
         throw std::invalid_argument("fp8 A8 attn_input_proj requires caller workspace");
     }
     auto scope                   = workspace->scope();
     const Fp8A8Workspace scratch = allocate_fp8_a8_workspace(*workspace, x.ne[1], weight.k);
     fp8_attn_input_a8_launch(x, weight, q, gate, k, v, scratch, stream);
+#endif
 }
 
 } // namespace ninfer::ops::detail

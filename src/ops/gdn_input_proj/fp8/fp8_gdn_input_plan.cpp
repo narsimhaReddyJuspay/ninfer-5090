@@ -20,7 +20,13 @@ Fp8GdnInputRoute resolve_route(LinearPolicy policy, std::int32_t tokens) {
     if (policy != LinearPolicy::AllowA8) {
         throw std::invalid_argument("fp8 gdn_input_proj: unsupported policy");
     }
+#ifdef NINFER_FP8_W8A8
     return tokens >= 8 ? Fp8GdnInputRoute::A8 : Fp8GdnInputRoute::A16;
+#else
+    // The W8A8 f8f6f4 tensor-core kernels are Ada/Blackwell-only; on sm_90a the
+    // permissive policy degrades to the portable A16 route.
+    return Fp8GdnInputRoute::A16;
+#endif
 }
 
 } // namespace
@@ -31,9 +37,14 @@ std::size_t fp8_gdn_input_workspace_capacity_bytes(LinearPolicy policy, std::int
         throw std::invalid_argument("fp8 gdn_input_proj workspace: invalid token interval");
     }
     (void)resolve_route(policy, min_tokens);
+#ifdef NINFER_FP8_W8A8
     return resolve_route(policy, max_tokens) == Fp8GdnInputRoute::A8
                ? fp8_a8_workspace_capacity_bytes(max_tokens, Fp8GdnInputGeometry::kInputRows)
                : 0;
+#else
+    (void)resolve_route(policy, max_tokens);
+    return 0;
+#endif
 }
 
 void fp8_gdn_input_a16_dispatch(const Tensor& x, const Weight& weight, Tensor& qkv, Tensor& z,
@@ -61,12 +72,14 @@ void fp8_gdn_input_a16_dispatch(const Tensor& x, const Weight& weight, Tensor& q
     }
 }
 
+#ifdef NINFER_FP8_W8A8
 void fp8_gdn_input_a8_dispatch(const Tensor& x, const Weight& weight, Tensor& qkv, Tensor& z,
                                WorkspaceArena& workspace, cudaStream_t stream) {
     auto scope                   = workspace.scope();
     const Fp8A8Workspace scratch = allocate_fp8_a8_workspace(workspace, x.ne[1], weight.k);
     fp8_gdn_input_a8_launch(x, weight, qkv, z, scratch, stream);
 }
+#endif
 
 void fp8_gdn_input_dispatch(const Tensor& x, const Weight& weight, Tensor& qkv, Tensor& z,
                             LinearPolicy policy, WorkspaceArena* workspace, cudaStream_t stream) {
@@ -74,10 +87,12 @@ void fp8_gdn_input_dispatch(const Tensor& x, const Weight& weight, Tensor& qkv, 
         fp8_gdn_input_a16_dispatch(x, weight, qkv, z, stream);
         return;
     }
+#ifdef NINFER_FP8_W8A8
     if (workspace == nullptr) {
         throw std::invalid_argument("fp8 A8 gdn_input_proj requires caller workspace");
     }
     fp8_gdn_input_a8_dispatch(x, weight, qkv, z, *workspace, stream);
+#endif
 }
 
 } // namespace ninfer::ops::detail

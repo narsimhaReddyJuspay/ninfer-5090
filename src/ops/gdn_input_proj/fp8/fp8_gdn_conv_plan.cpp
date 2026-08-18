@@ -16,6 +16,14 @@ namespace {
 constexpr std::int32_t kChannels = 10240;
 constexpr std::int32_t kZRows    = 6144;
 
+// The W8A8 f8f6f4 tensor-core kernels are Ada/Blackwell-only; on sm_90a the
+// materialized A8 schedule is unavailable and AllowA8 degrades to A16 plans.
+#ifdef NINFER_FP8_W8A8
+constexpr bool kFp8W8a8Available = true;
+#else
+constexpr bool kFp8W8a8Available = false;
+#endif
+
 enum class Fp8GdnConvScheduleId : std::uint8_t {
     FusedA16,
     MaterializedA16,
@@ -71,10 +79,12 @@ void launch_projection(const Tensor& x, const Weight& weight, Tensor& projected,
         fp8_gdn_input_a16_dispatch(x, weight, projected, z, stream);
         return;
     }
+#ifdef NINFER_FP8_W8A8
     if (schedule == Fp8GdnConvScheduleId::MaterializedA8) {
         fp8_gdn_input_a8_dispatch(x, weight, projected, z, workspace, stream);
         return;
     }
+#endif
     throw std::logic_error("fp8 GDN materialized projection received a fused plan");
 }
 
@@ -85,12 +95,12 @@ Fp8GdnConvPlan fp8_gdn_snapshot_resolve_plan(LinearPolicy policy, std::int32_t w
         throw std::invalid_argument("fp8 GDN snapshot: invalid B/W domain");
     }
     if (batch_size == 1) {
-        if (policy == LinearPolicy::AllowA8 && width >= 10) {
+        if (kFp8W8a8Available && policy == LinearPolicy::AllowA8 && width >= 10) {
             return {Fp8GdnConvScheduleId::MaterializedA8};
         }
         return b1_a16_plan(width);
     }
-    if (policy == LinearPolicy::AllowA8 && width * batch_size >= 9) {
+    if (kFp8W8a8Available && policy == LinearPolicy::AllowA8 && width * batch_size >= 9) {
         return {Fp8GdnConvScheduleId::MaterializedA8};
     }
     return {Fp8GdnConvScheduleId::MaterializedA16};
@@ -103,12 +113,12 @@ Fp8GdnConvPlan fp8_gdn_record_resolve_plan(LinearPolicy policy, std::int32_t wid
         throw std::invalid_argument("fp8 GDN record: invalid B/W domain");
     }
     if (batch_size == 1) {
-        if (policy == LinearPolicy::AllowA8 && width >= 10) {
+        if (kFp8W8a8Available && policy == LinearPolicy::AllowA8 && width >= 10) {
             return {Fp8GdnConvScheduleId::MaterializedA8};
         }
         return b1_a16_plan(width);
     }
-    if (policy == LinearPolicy::AllowA8 && width * batch_size >= 8) {
+    if (kFp8W8a8Available && policy == LinearPolicy::AllowA8 && width * batch_size >= 8) {
         return {Fp8GdnConvScheduleId::MaterializedA8};
     }
     return {Fp8GdnConvScheduleId::MaterializedA16};

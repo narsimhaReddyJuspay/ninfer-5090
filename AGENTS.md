@@ -112,7 +112,11 @@ execution architecture per build — `sm_120a`, tuned and measured on NVIDIA GeF
 `sm_90a` for NVIDIA H100 — selected by `CMAKE_CUDA_ARCHITECTURES` (`120a` default, `90a` for H100).
 The `nvfp4` identities execute only on the `sm_120a` build: their W4A4 kernels use the Blackwell
 block-scaled FP4 tensor cores, which Hopper does not implement, so an `sm_90a` build rejects those
-identities at load and carries only the portable nvfp4 A16 routes for Op-level callers. All
+identities at load and carries only the portable nvfp4 A16 routes for Op-level callers. The FP8
+W8A8 tensor-core kernels are likewise compiled only into the `sm_120a` build (`mma.sync
+kind::f8f6f4` is Ada-family and absent on Hopper); an `sm_90a` build carries only the portable FP8
+A16 routes, with AllowA8 degrading to A16. No registered `groupwise-int` artifact carries FP8
+weights, so this affects Op-level callers only. All
 identities execute Text,
 image/video Vision, MTP, prefix reuse, CLI, OpenAI/Anthropic serving, and measurement through the
 same public `.ninfer` Engine route; the 35B-A3B target additionally supports text-only DFlash.

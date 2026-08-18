@@ -27,8 +27,14 @@ Fp8LinearAddRoute resolve_route(std::int32_t output_rows, std::int32_t input_row
     if (policy != LinearPolicy::AllowA8) {
         throw std::invalid_argument("fp8 linear_add: unsupported policy");
     }
+#ifdef NINFER_FP8_W8A8
     const std::int32_t first_a8 = input_rows == Fp8Residual6144Geometry::kInputRows ? 22 : 25;
     return tokens >= first_a8 ? Fp8LinearAddRoute::A8 : Fp8LinearAddRoute::A16;
+#else
+    // The W8A8 f8f6f4 tensor-core kernels are Ada/Blackwell-only; on sm_90a the
+    // permissive policy degrades to the portable A16 route.
+    return Fp8LinearAddRoute::A16;
+#endif
 }
 
 void launch_a16(const Tensor& x, const Weight& weight, Tensor& residual, cudaStream_t stream) {
@@ -58,9 +64,14 @@ std::size_t fp8_linear_add_workspace_capacity_bytes(std::int32_t output_rows,
         throw std::invalid_argument("fp8 linear_add workspace: invalid token interval");
     }
     (void)resolve_route(output_rows, input_rows, policy, min_tokens);
+#ifdef NINFER_FP8_W8A8
     return resolve_route(output_rows, input_rows, policy, max_tokens) == Fp8LinearAddRoute::A8
                ? fp8_a8_workspace_capacity_bytes(max_tokens, input_rows)
                : 0;
+#else
+    (void)resolve_route(output_rows, input_rows, policy, max_tokens);
+    return 0;
+#endif
 }
 
 void fp8_linear_add_dispatch(const Tensor& x, const Weight& weight, Tensor& residual,
@@ -70,7 +81,9 @@ void fp8_linear_add_dispatch(const Tensor& x, const Weight& weight, Tensor& resi
         launch_a16(x, weight, residual, stream);
         return;
     }
+#ifdef NINFER_FP8_W8A8
     fp8_linear_add_a8_launch(x, weight, residual, workspace, stream);
+#endif
 }
 
 } // namespace ninfer::ops::detail

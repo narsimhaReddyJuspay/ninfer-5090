@@ -108,7 +108,6 @@ add_library(ninfer_ops STATIC
   ops/attn_input_proj/bf16/bf16_attn_input_plan.cpp
   ops/attn_input_proj/fp8/fp8_attn_input_decode.cu
   ops/attn_input_proj/fp8/fp8_attn_input_small_t.cu
-  ops/attn_input_proj/fp8/fp8_attn_input_a8.cu
   ops/attn_input_proj/fp8/fp8_attn_input_plan.cpp
   ops/attn_input_proj/nvfp4/nvfp4_attn_input_decode.cu
   ops/attn_input_proj/nvfp4/nvfp4_attn_input_small_t.cu
@@ -123,7 +122,6 @@ add_library(ninfer_ops STATIC
   ops/attn_input_proj/w8/w8_attn_input_plan.cpp
   ops/gdn_input_proj/fp8/fp8_gdn_input_decode.cu
   ops/gdn_input_proj/fp8/fp8_gdn_input_small_t.cu
-  ops/gdn_input_proj/fp8/fp8_gdn_input_a8.cu
   ops/gdn_input_proj/fp8/fp8_gdn_input_plan.cpp
   ops/gdn_input_proj/fp8/fp8_gdn_conv_fused.cu
   ops/gdn_input_proj/fp8/fp8_gdn_conv_plan.cpp
@@ -153,7 +151,6 @@ add_library(ninfer_ops STATIC
   ops/linear/fp8/fp8_gemv.cu
   ops/linear/fp8/fp8_small_t.cu
   ops/linear/fp8/fp8_a16_mma.cu
-  ops/linear/fp8/fp8_a8.cu
   ops/linear/fp8/fp8_dispatch.cpp
   ops/linear/nvfp4/nvfp4_format.cpp
   ops/linear/nvfp4/nvfp4_gemv.cu
@@ -177,7 +174,6 @@ add_library(ninfer_ops STATIC
   ops/linear_add/nvfp4/nvfp4_linear_add_plan.cpp
   ops/linear_add/fp8/fp8_linear_add_decode.cu
   ops/linear_add/fp8/fp8_linear_add_small_t.cu
-  ops/linear_add/fp8/fp8_linear_add_a8.cu
   ops/linear_add/fp8/fp8_linear_add_plan.cpp
   ops/linear_add/q5/q5_linear_add_gemm_mma.cu
   ops/linear_add/q5/q5_linear_add_gemm_simt.cu
@@ -195,7 +191,6 @@ add_library(ninfer_ops STATIC
   ops/linear_swiglu/nvfp4/nvfp4_linear_swiglu_plan.cpp
   ops/linear_swiglu/fp8/fp8_linear_swiglu_decode.cu
   ops/linear_swiglu/fp8/fp8_linear_swiglu_small_t.cu
-  ops/linear_swiglu/fp8/fp8_linear_swiglu_a8.cu
   ops/linear_swiglu/fp8/fp8_linear_swiglu_plan.cpp
   ops/linear_swiglu/w8/w8_linear_swiglu_decode.cu
   ops/linear_swiglu/w8/w8_linear_swiglu_gemm_mma.cu
@@ -262,16 +257,24 @@ ninfer_internal_includes(ninfer_ops)
 ninfer_cuda_archive(ninfer_ops)
 if(CMAKE_CUDA_ARCHITECTURES STREQUAL "120a")
   # The NVFP4 W4A4 kernels execute on the Blackwell block-scaled FP4 tensor
-  # cores (mma.sync.kind::mxf4nvf4), which sm_90a does not implement; their
-  # dispatch plans carry explicit fallback errors in the 90a build. A new
-  # nvfp4 W4A4 op is a three-part change: this source list, the plan-level
+  # cores (mma.sync.kind::mxf4nvf4), and the FP8 W8A8 kernels emit the
+  # Ada-family mma.sync.kind::f8f6f4 instruction; sm_90a implements neither.
+  # In the 90a build the nvfp4 dispatch plans carry explicit fallback errors
+  # while the fp8 plans degrade AllowA8 to the portable A16 route. A new
+  # W4A4 op is a three-part change: this source list, the plan-level
   # NINFER_NVFP4_W4A4 guards, and a rejection entry in
-  # tests/ops/linear/test_nvfp4_w4a4_rejection.cpp.
+  # tests/ops/linear/test_nvfp4_w4a4_rejection.cpp; an fp8 W8A8 op mirrors
+  # this with NINFER_FP8_W8A8 guards and an A16 degradation path.
   target_sources(ninfer_ops PRIVATE
+    ops/attn_input_proj/fp8/fp8_attn_input_a8.cu
     ops/attn_input_proj/nvfp4/nvfp4_attn_input_w4a4.cu
+    ops/gdn_input_proj/fp8/fp8_gdn_input_a8.cu
     ops/gdn_input_proj/nvfp4/nvfp4_gdn_input_w4a4.cu
+    ops/linear/fp8/fp8_a8.cu
     ops/linear/nvfp4/nvfp4_w4a4.cu
+    ops/linear_add/fp8/fp8_linear_add_a8.cu
     ops/linear_add/nvfp4/nvfp4_linear_add_w4a4.cu
+    ops/linear_swiglu/fp8/fp8_linear_swiglu_a8.cu
     ops/linear_swiglu/nvfp4/nvfp4_linear_swiglu_w4a4.cu)
 endif()
 target_link_libraries(ninfer_ops PUBLIC ninfer_core)

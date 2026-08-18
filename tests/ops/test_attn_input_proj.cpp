@@ -345,7 +345,11 @@ int run_fp8_target_case(DevicePackedWeight& parent, std::int32_t tokens, ops::Li
     constexpr std::int32_t kKeyBegin   = kQRows;
     constexpr std::int32_t kGateBegin  = kKeyBegin + kKvRows;
     constexpr std::int32_t kValueBegin = kGateBegin + kQRows;
-    const bool a8                      = policy == ops::LinearPolicy::AllowA8 && tokens >= 11;
+#ifdef NINFER_FP8_W8A8
+    const bool a8 = policy == ops::LinearPolicy::AllowA8 && tokens >= 11;
+#else
+    const bool a8 = false; // AllowA8 degrades to the A16 route on sm_90a
+#endif
     const ReductionCriterion& criterion =
         a8 ? kAttnInputProjA8Tolerance : kFp8AttnInputProjA16Tolerance;
     const std::int32_t sample_count = a8 ? kA8SampleRows : 7;

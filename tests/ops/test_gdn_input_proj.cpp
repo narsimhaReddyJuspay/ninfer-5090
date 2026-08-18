@@ -248,7 +248,11 @@ int run_fp8_case(DevicePackedWeight& parent, std::int32_t tokens, ops::LinearPol
     }
     cuda_synchronize();
 
+#ifdef NINFER_FP8_W8A8
     const bool a8 = policy == ops::LinearPolicy::AllowA8 && tokens >= 8;
+#else
+    const bool a8 = false; // AllowA8 degrades to the A16 route on sm_90a
+#endif
     const ReductionCriterion& criterion =
         a8 ? kFp8GdnInputProjA8Tolerance : kFp8GdnInputProjA16Tolerance;
     const std::int32_t sample_count = a8 ? kA8SampleRows : 7;
