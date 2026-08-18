@@ -73,9 +73,7 @@ pkg_check_modules(FFMPEG REQUIRED IMPORTED_TARGET
 if(NINFER_BUILD_MEDIA_ACQUIRE)
   pkg_check_modules(LIBCURL REQUIRED IMPORTED_TARGET libcurl>=7.85)
 endif()
-if(NINFER_BUILD_SERVE)
-  find_package(Threads REQUIRED)
-endif()
+find_package(Threads REQUIRED)
 
 # --- Subdirectories ----------------------------------------------------------
 add_subdirectory(src)
